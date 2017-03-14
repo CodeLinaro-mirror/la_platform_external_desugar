@@ -77,8 +77,7 @@ class HeaderClassLoader extends ClassLoader {
 
   @Override
   protected Class<?> findClass(String name) throws ClassNotFoundException {
-    String filename = name.replace('.', '/') + ".class";
-    filename = rewriter.unprefix(filename);
+    String filename = rewriter.unprefix(name.replace('.', '/') + ".class");
     JarFile jarfile = jarfiles.get(filename);
     if (jarfile == null) {
       throw new ClassNotFoundException();

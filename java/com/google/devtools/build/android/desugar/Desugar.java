@@ -111,8 +111,7 @@ class Desugar {
 
     @Option(name = "core_library",
         defaultValue = "false",
-        category = "misc",
-        abbrev = 'c',
+        category = "undocumented",
         help = "Enables rewriting to desugar java.* classes.")
     public boolean coreLibrary;
   }
@@ -154,11 +153,8 @@ class Desugar {
       parent = new ThrowingClassLoader();
     }
 
-    String prefix = "";
-    if (options.coreLibrary) {
-      prefix = "__desugar__/";
-    }
-    CoreLibraryRewriter rewriter = new CoreLibraryRewriter(prefix);
+    CoreLibraryRewriter rewriter =
+        new CoreLibraryRewriter(options.coreLibrary ? "__desugar__/" : "");
 
     ClassLoader loader =
         createClassLoader(
@@ -181,7 +177,7 @@ class Desugar {
           // danger of accidentally uncompressed resources ending up in an .apk.
           if (entry.getName().endsWith(".class")) {
             ClassReader reader = rewriter.reader(content);
-            CoreLibraryRewriter.Writer writer =
+            CoreLibraryRewriter.UnprefixingClassWriter writer =
                 rewriter.writer(ClassWriter.COMPUTE_MAXS /*for bridge methods*/);
             ClassVisitor visitor = writer;
             if (!allowDefaultMethods) {
@@ -197,10 +193,7 @@ class Desugar {
 
             reader.accept(visitor, 0);
 
-            String name = entry.getName();
-            name = rewriter.unprefix(name);
-
-            writeStoredEntry(out, name, writer.toByteArray());
+            writeStoredEntry(out, entry.getName(), writer.toByteArray());
           } else {
             // TODO(bazel-team): Avoid de- and re-compressing resource files
             ZipEntry destEntry = new ZipEntry(entry);
@@ -223,13 +216,13 @@ class Desugar {
         try (InputStream bytecode =
             Files.newInputStream(dumpDirectory.resolve(lambdaClass.getKey()))) {
           ClassReader reader = rewriter.reader(bytecode);
-          CoreLibraryRewriter.Writer writer =
+          CoreLibraryRewriter.UnprefixingClassWriter writer =
               rewriter.writer(ClassWriter.COMPUTE_MAXS /*for invoking bridges*/);
           ClassVisitor visitor = writer;
 
           if (!allowDefaultMethods) {
             // null ClassReaderFactory b/c we don't expect to need it for lambda classes
-            visitor = new Java7Compatibility(visitor, null);
+            visitor = new Java7Compatibility(visitor, (ClassReaderFactory) null);
           }
 
           LambdaClassFixer lambdaFixer =
@@ -243,8 +236,7 @@ class Desugar {
           // instructions in generated lambda classes (checkState below will fail)
           reader.accept(
               new LambdaDesugaring(lambdaFixer, loader, lambdas, null, allowDefaultMethods), 0);
-          String name = lambdaFixer.getInternalName() + ".class";
-          name = rewriter.unprefix(name);
+          String name = rewriter.unprefix(lambdaFixer.getInternalName() + ".class");
           writeStoredEntry(out, name, writer.toByteArray());
         }
       }
@@ -302,7 +294,7 @@ class Desugar {
     }
   }
 
-  private static void deleteTreeOnExit(Path directory) {
+  private static void deleteTreeOnExit(final Path directory) {
     Thread shutdownHook =
         new Thread() {
           @Override
@@ -318,7 +310,7 @@ class Desugar {
   }
 
   /** Recursively delete a directory. */
-  private static void deleteTree(Path directory) throws IOException {
+  private static void deleteTree(final Path directory) throws IOException {
     if (directory.toFile().exists()) {
       Files.walkFileTree(
           directory,

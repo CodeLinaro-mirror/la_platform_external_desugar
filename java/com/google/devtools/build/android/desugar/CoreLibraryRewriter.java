@@ -1,4 +1,4 @@
-// Copyright 2016 The Bazel Authors. All rights reserved.
+// Copyright 2017 The Bazel Authors. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -25,27 +25,37 @@ import org.objectweb.asm.commons.Remapper;
 
 /** Utility class to prefix or unprefix class names of core library classes */
 class CoreLibraryRewriter {
+  private final String prefix;
+
   public CoreLibraryRewriter(String prefix) {
     this.prefix = prefix;
   }
 
+  /**
+   * Factory method that returns either a normal ClassReader if prefix is empty, or a ClassReader
+   * with a ClassRemapper that prefixes class names of core library classes if prefix is not empty.
+   */
   public ClassReader reader(InputStream content) throws IOException {
-    if (!"".equals(prefix)) {
-      return new Reader(content);
+    if (prefix.length() != 0) {
+      return new PrefixingClassReader(content);
     } else {
       return new ClassReader(content);
     }
   }
 
-  public Writer writer(int flags) {
-    return new Writer(flags);
+  /**
+   * Factory method that returns a ClassVisitor that delegates to a ClassWriter, removing prefix
+   * from core library class names if it is not empty.
+   */
+  public UnprefixingClassWriter writer(int flags) {
+    return new UnprefixingClassWriter(flags);
   }
 
-  public static boolean shouldPrefix(String typeName) {
-    return typeName.startsWith("java/") || typeName.startsWith("sun/");
+  private static boolean shouldPrefix(String typeName) {
+    return (typeName.startsWith("java/") || typeName.startsWith("sun/")) && !except(typeName);
   }
 
-  public static boolean except(String typeName) {
+  private static boolean except(String typeName) {
     if (typeName.startsWith("java/lang/invoke/")) {
       return true;
     }
@@ -75,24 +85,27 @@ class CoreLibraryRewriter {
     return false;
   }
 
+  /** Prefixes core library class names with prefix */
   public String prefix(String typeName) {
-    if (shouldPrefix(typeName) && !except(typeName)) {
+    if (prefix.length() >  0 && shouldPrefix(typeName)) {
       return prefix + typeName;
     }
     return typeName;
   }
 
+  /** Removes prefix from class names */
   public String unprefix(String typeName) {
-    if (!typeName.startsWith(prefix)) {
+    if (prefix.length() == 0 || !typeName.startsWith(prefix)) {
       return typeName;
     }
     return typeName.substring(prefix.length());
   }
 
-  private final String prefix;
-
-  private class Reader extends ClassReader {
-    Reader(InputStream content) throws IOException {
+  /**
+   * ClassReader that prefixes core library class names as they are read
+   */
+  private class PrefixingClassReader extends ClassReader {
+    PrefixingClassReader(InputStream content) throws IOException {
       super(content);
     }
 
@@ -111,14 +124,18 @@ class CoreLibraryRewriter {
     }
   }
 
-  public class Writer extends ClassVisitor {
+  /**
+   * ClassVisitor that delegates to a ClassWriter, but removes a prefix as each class is written.
+   * The unprefixing is optimized out if prefix is empty.
+   */
+  public class UnprefixingClassWriter extends ClassVisitor {
     private final ClassWriter writer;
 
-    Writer(int flags) {
+    UnprefixingClassWriter(int flags) {
       super(Opcodes.ASM5);
       this.writer = new ClassWriter(flags);
       this.cv = this.writer;
-      if (!"".equals(prefix)) {
+      if (prefix.length() != 0) {
         this.cv =
             new ClassRemapper(
                 this.cv,
